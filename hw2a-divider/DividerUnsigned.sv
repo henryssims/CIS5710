@@ -39,5 +39,18 @@ module DividerOneIter (
     */
 
     // TODO: your code here
-
+    wire [31:0] remainder_new = (i_remainder << 1) | ((i_dividend >> 31) & 32'b1);
+    logic lt = remainder_new < i_divisor;
+    logic [31:0] quotient, remainder_subtracted;
+    always_comb begin
+        quotient = i_quotient << 1;
+        remainder_subtracted = remainder_new;
+        if (lt == 0) begin
+            quotient = quotient | 32'b1;
+            remainder_subtracted = remainder_subtracted - i_divisor;
+        end
+    end
+    assign o_dividend = i_dividend << 1;
+    assign o_remainder = remainder_subtracted;
+    assign o_quotient = quotient;
 endmodule
