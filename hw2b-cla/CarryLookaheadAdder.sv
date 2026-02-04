@@ -26,7 +26,6 @@ module gp4(input wire [3:0] gin, pin,
            output wire gout, pout,
            output wire [2:0] cout);
 
-   // TODO: your code here
    assign gout = (gin[3]) | (pin[3] & gin[2]) | (& pin[3:2] & gin[1]) | (& pin[3:1] & gin[0]);
    assign pout = (& pin);
    wire c1 = gin[0] | (pin[0] & cin);
@@ -43,20 +42,21 @@ module gp8(input wire [7:0] gin, pin,
            output wire gout, pout,
            output wire [6:0] cout);
 
-   // TODO: your code here
    wire g0out;
    wire p0out;
    wire [2:0] c0out;
    gp4 a(.gin(gin[3:0]), .pin(pin[3:0]), .cin(cin), .gout(g0out), .pout(p0out), .cout(c0out));
 
+   wire c4 = g0out | (p0out & cin);
+
    wire g1out;
    wire p1out;
    wire [2:0] c1out;
-   gp4 a(.gin(gin[7:4]), .pin(pin[7:4]), .cin(cin), .gout(g1out), .pout(p1out), .cout(c1out));
+   gp4 b(.gin(gin[7:4]), .pin(pin[7:4]), .cin(c4), .gout(g1out), .pout(p1out), .cout(c1out));
 
    assign gout = g1out | (p1out & g0out);
    assign pout = p1out & p0out;
-   assign cout = {c1out, c0out};
+   assign cout = {c1out, c4, c0out};
 
 
 endmodule
@@ -65,33 +65,34 @@ module CarryLookaheadAdder
   (input wire [31:0]  a, b,
    input wire         cin,
    output wire [31:0] sum);
+
    wire [31:0] g;
    wire [31:0] p;
    genvar i;
    for (i = 0; i < 32; i = i + 1) begin
-      gp1 g(.a(a[i]), .b(b[i]), .g(g[i]), .p(p[i]));
-   end
-
-   wire [7:0] gout;
-   wire [7:0] pout;
-   wire [31:0] c;
-   assign c[0] = cin;
-   genvar j;
-   for (j = 0; j < 8; j = j + 1) begin
-      gp4 h(.gin(g[j*4 + 3: j*4]), .pin(p[j*4 + 3: j*4], .cin(c[j*4])), .gout(gout[j]), .pout(pout[j]), .cout(c[j*4 + 3: j*4 + 1]));
-      assign c[j*4 + 4] = gout[j] | (pout[j] & c[j*4]);
+      gp1 gp(.a(a[i]), .b(b[i]), .g(g[i]), .p(p[i]));
    end
 
    wire [3:0] g8out;
    wire [3:0] p8out;
-   wire [31:0] c8;
-   assign c8[0] = cin;
-   genvar k;
-   for (k = 0; k < 4; k = k + 1) begin
-      gp8 e(.gin(g[k*8 + 7: k*8], .pin(p[k*8 + 7: k*8]), .cin(c8[k*8]), .gout(g8out[k]), .pout(p8out[k]), .cout(c8[k*8 + 7: k*8 + 1])));
-      assign c8[k*8 + 8] = g8out[k] | (pout[k] & c8[k*8]);
-   end
 
-   // TODO: your code here
+   wire [6:0] c8_0;
+   gp8 gp_0(.gin(g[7:0]), .pin(p[7:0]), .cin(cin), .gout(g8out[0]), .pout(p8out[0]), .cout(c8_0));
+   wire cin_1 = g8out[0] | (p8out[0] & cin);
+
+   wire [6:0] c8_1;
+   gp8 gp_1(.gin(g[15:8]), .pin(p[15:8]), .cin(cin_1), .gout(g8out[1]), .pout(p8out[1]), .cout(c8_1));
+   wire cin_2 = g8out[1] | (p8out[1] & cin_1);
+
+   wire [6:0] c8_2;
+   gp8 gp_2(.gin(g[23:16]), .pin(p[23:16]), .cin(cin_2), .gout(g8out[2]), .pout(p8out[2]), .cout(c8_2));
+   wire cin_3 = g8out[2] | (p8out[2] & cin_2);
+
+   wire [6:0] c8_3;
+   gp8 gp_3(.gin(g[31:24]), .pin(p[31:24]), .cin(cin_3), .gout(g8out[3]), .pout(p8out[3]), .cout(c8_3));
+
+   wire [31:0] c = {c8_3, cin_3, c8_2, cin_2, c8_1, cin_1, c8_0, cin};
+
+   assign sum = a ^ b ^ c;
 
 endmodule
