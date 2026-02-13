@@ -77,6 +77,10 @@ module DatapathSingleCycle (
   // split R-type instruction - see section 2.2 of RiscV spec
   assign {insn_funct7, insn_rs2, insn_rs1, insn_funct3, insn_rd, insn_opcode} = insn_from_imem;
 
+   // U
+  wire [19:0] imm_u;
+  assign imm_u = insn_from_imem[31:12];
+
   // setup for I, S, B & J type instructions
   // I - short immediates and loads
   wire [11:0] imm_i;
@@ -212,28 +216,47 @@ module DatapathSingleCycle (
   end
 
   // NOTE: don't rename your RegFile instance as the tests expect it to be `rf`
-  // TODO: you will need to edit the port connections, however.
+  logic we;
+  logic [`REG_SIZE] rd_data;
   wire [`REG_SIZE] rs1_data;
   wire [`REG_SIZE] rs2_data;
   RegFile rf (
     .clk(clk),
     .rst(rst),
-    .we(1'b0),
-    .rd(0),
-    .rd_data(0),
-    .rs1(0),
-    .rs2(0),
+    .we(we),
+    .rd(insn_rd),
+    .rd_data(rd_data),
+    .rs1(insn_rs1),
+    .rs2(insn_rs2),
     .rs1_data(rs1_data),
     .rs2_data(rs2_data));
+
+  wire [`REG_SIZE] addi_sum;
+  CarryLookaheadAdder addi_adder (
+    .a(rs1_data),
+    .b(imm_i_sext),
+    .cin(1'b0),
+    .sum(addi_sum));
+
 
   logic illegal_insn;
 
   always_comb begin
     illegal_insn = 1'b0;
+    we = 1'b0;
+    rd_data = 32'd0;
+    pcNext = pcCurrent + 4;
 
     case (insn_opcode)
       OpLui: begin
-        // TODO: start here by implementing lui
+        we = 1'b1;
+        rd_data = imm_u << 12;
+      end
+      OpRegImm: begin
+        if (insn_addi) begin
+          we = 1'b1;
+          rd_data = addi_sum;
+        end
       end
       default: begin
         illegal_insn = 1'b1;
