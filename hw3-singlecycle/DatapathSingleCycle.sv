@@ -216,6 +216,8 @@ module DatapathSingleCycle (
   end
 
   // NOTE: don't rename your RegFile instance as the tests expect it to be `rf`
+  logic branch_taken;
+
   logic we;
   logic [`REG_SIZE] rd_data;
   wire [`REG_SIZE] rs1_data;
@@ -231,13 +233,16 @@ module DatapathSingleCycle (
     .rs1_data(rs1_data),
     .rs2_data(rs2_data));
 
-  wire [`REG_SIZE] addi_sum;
-  CarryLookaheadAdder addi_adder (
-    .a(rs1_data),
-    .b(imm_i_sext),
-    .cin(1'b0),
-    .sum(addi_sum));
+  wire [`REG_SIZE] adder_sum;
+  logic [`REG_SIZE] adder_a;
+  logic [`REG_SIZE] adder_b;
+  logic adder_cin;
 
+  CarryLookaheadAdder addi_adder (
+    .a(adder_a),
+    .b(adder_b),
+    .cin(adder_cin),
+    .sum(adder_sum));
 
   logic illegal_insn;
 
@@ -245,17 +250,96 @@ module DatapathSingleCycle (
     illegal_insn = 1'b0;
     we = 1'b0;
     rd_data = 32'd0;
+    adder_a = 32'd0;
+    adder_b = 32'd0;
+    adder_cin = 1'b0;
+    halt = 1'b0;
+    branch_taken = 1'b0;
+
     pcNext = pcCurrent + 4;
 
     case (insn_opcode)
       OpLui: begin
         we = 1'b1;
-        rd_data = imm_u << 12;
+        rd_data = {imm_u, 12'b0};
       end
       OpRegImm: begin
+        we = 1'b1;
         if (insn_addi) begin
-          we = 1'b1;
-          rd_data = addi_sum;
+          adder_a = rs1_data;
+          adder_b = imm_i_sext;
+          adder_cin = 1'b0;
+          rd_data = adder_sum;
+        end else if (insn_slti) begin
+          rd_data = ($signed(rs1_data) < $signed(imm_i_sext)) ? 32'b1 : 32'b0;
+        end else if (insn_sltiu) begin
+          rd_data = ($unsigned(rs1_data) < $unsigned(imm_i_sext)) ? 32'b1 : 32'b0;
+        end else if (insn_xori) begin
+          rd_data = rs1_data ^ imm_i_sext;
+        end else if (insn_ori) begin
+          rd_data = rs1_data | imm_i_sext;
+        end else if (insn_andi) begin
+          rd_data = rs1_data & imm_i_sext;
+        end else if (insn_slli) begin
+          rd_data = rs1_data << imm_shamt;
+        end else if (insn_srli) begin
+          rd_data = rs1_data >> imm_shamt;
+        end else if (insn_srai) begin
+          rd_data = $signed(rs1_data) >>> imm_shamt;
+        end
+      end
+      OpRegReg: begin
+        we = 1'b1;
+        if (insn_add) begin
+          adder_a = rs1_data;
+          adder_b = rs2_data;
+          adder_cin = 1'b0;
+          rd_data = adder_sum;
+        end else if (insn_sub) begin
+          adder_a = rs1_data;
+          adder_b = ~ rs2_data;
+          adder_cin = 1'b1;
+          rd_data = adder_sum;
+        end else if (insn_sll) begin
+          rd_data = rs1_data << rs2_data[4:0];
+        end else if (insn_slt) begin
+          rd_data = ($signed(rs1_data) < $signed(rs2_data)) ? 32'b1 : 32'b0;
+        end else if (insn_sltu) begin
+          rd_data = ($unsigned(rs1_data) < $unsigned(rs2_data)) ? 32'b1 : 32'b0;
+        end else if (insn_xor) begin
+          rd_data = rs1_data ^ rs2_data;
+        end else if (insn_srl) begin
+          rd_data = rs1_data >> rs2_data[4:0];
+        end else if (insn_sra) begin
+          rd_data = $signed(rs1_data) >>> rs2_data[4:0];
+        end else if (insn_or) begin
+          rd_data = rs1_data | rs2_data;
+        end else if (insn_and) begin
+          rd_data = rs1_data & rs2_data;
+        end
+      end
+      OpBranch: begin
+        if (insn_beq) begin
+          branch_taken = (rs1_data == rs2_data);
+        end else if (insn_bne) begin
+          branch_taken = (rs1_data != rs2_data);
+        end else if (insn_blt) begin
+          branch_taken = ($signed(rs1_data) < $signed(rs2_data));
+        end else if (insn_bge) begin
+          branch_taken = ($signed(rs1_data) >= $signed(rs2_data));
+        end else if (insn_bltu) begin
+          branch_taken = ($unsigned(rs1_data) < $unsigned(rs2_data));
+        end else if (insn_bgeu) begin
+          branch_taken = ($unsigned(rs1_data) >= $unsigned(rs2_data));
+        end
+        
+        if (branch_taken) begin
+          pcNext = pcCurrent + imm_b_sext;
+        end
+      end
+      OpEnviron: begin
+        if (insn_ecall) begin
+          halt = 1'b1;
         end
       end
       default: begin
@@ -263,6 +347,10 @@ module DatapathSingleCycle (
       end
     endcase
   end
+
+  assign trace_completed_pc = pcCurrent;
+  assign trace_completed_insn = insn_from_imem;
+  assign trace_completed_cycle_status = CYCLE_NO_STALL;
 
 endmodule
 
