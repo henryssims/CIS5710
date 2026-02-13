@@ -29,28 +29,17 @@ module RegFile (
   logic [`REG_SIZE] regs[NumRegs];
 
   // TODO: your code here
-  logic [`REG_SIZE] reg_outs[NumRegs];
-  assign reg_outs[0] = 32'd0; // x0 is always zero
-  assign rs1_data = reg_outs[rs1]; // 1st read port
-  assign rs2_data = reg_outs[rs2]; // 2nd read port
-  always_ff @(posedge clk) begin
-    if (rst) begin
-      reg_outs[1] <= 32'd0;
-    end else begin
-      if (we && rd == 1) begin
-        reg_outs[1] <= rd_data;
-      end
-    end
-  end
-  // add other registers using genvar and for loop
+  assign regs[0] = 32'd0;
+  assign rs1_data = regs[rs1];
+  assign rs2_data = regs[rs2];
   genvar i;
-  for (i = 2; i < 32; i = i + 1) begin
+  for (i = 1; i < 32; i = i + 1) begin
     always_ff @(posedge clk) begin
       if (rst) begin
-        reg_outs[i] <= 32'd0;
+        regs[i] <= 32'd0;
       end else begin
         if (we && rd == i) begin
-          reg_outs[i] <= rd_data;
+          regs[i] <= rd_data;
         end
       end
     end
