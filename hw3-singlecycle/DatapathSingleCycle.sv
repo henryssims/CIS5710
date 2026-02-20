@@ -245,6 +245,29 @@ module DatapathSingleCycle (
     .sum(adder_sum));
 
   logic illegal_insn;
+  MemorySingleCycle m (
+    .rst(rst),
+    .clock_mem(clock),
+
+    // must always be aligned to a 4B boundary
+    input wire [`REG_SIZE] pc_to_imem,
+
+    // the value at memory location pc_to_imem
+    output logic [`INSN_SIZE] insn_from_imem,
+
+    // must always be aligned to a 4B boundary
+    input wire [`REG_SIZE] addr_to_dmem,
+
+    // the value at memory location addr_to_dmem
+    output logic [`REG_SIZE] load_data_from_dmem,
+
+    // the value to be written to addr_to_dmem, controlled by store_we_to_dmem
+    input wire [`REG_SIZE] store_data_to_dmem,
+
+    // Each bit determines whether to write the corresponding byte of store_data_to_dmem to memory location addr_to_dmem.
+    // E.g., 4'b1111 will write 4 bytes. 4'b0001 will write only the least-significant byte.
+    input wire [3:0] store_we_to_dmem
+);
 
   always_comb begin
     illegal_insn = 1'b0;
@@ -262,6 +285,10 @@ module DatapathSingleCycle (
       OpLui: begin
         we = 1'b1;
         rd_data = {imm_u, 12'b0};
+      end
+      OpAuipc: begin
+        we = 1'b1;
+        rd_data = pcCurrent + {imm_u, 12'b0};
       end
       OpRegImm: begin
         we = 1'b1;
@@ -317,6 +344,16 @@ module DatapathSingleCycle (
         end else if (insn_and) begin
           rd_data = rs1_data & rs2_data;
         end
+      end
+      OpJal: begin
+        we = 1'b1;
+        rd_data = pcCurrent + 4;
+        pcNext = pcCurrent + imm_j_sext;
+      end
+      OpJalr: begin
+        we = 1'b1;
+        rd_data = pcCurrent + 4;
+        pcNext = (rs1_data + imm_i_sext) & ~32'b1;
       end
       OpBranch: begin
         if (insn_beq) begin
