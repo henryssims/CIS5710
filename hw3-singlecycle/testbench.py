@@ -288,6 +288,104 @@ async def testEcall(dut):
     assertEquals(0, dut.datapath.halt.value, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
     pass
 
+########################
+## MUL / DIV TESTS    ##
+########################
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testMul(dut):
+    "mul: lower 32 bits of rs1 * rs2"
+    await preTestSetup(dut, '''
+        addi x1,x0,6
+        addi x2,x0,7
+        mul x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 4)
+    assertEquals(42, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testMulh(dut):
+    "mulh: upper 32 bits of signed(rs1) * signed(rs2)"
+    await preTestSetup(dut, '''
+        addi x1,x0,1
+        slli x1,x1,30
+        addi x2,x0,2
+        mulh x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 5)
+    # (1<<30) * 2 = 1<<31, upper 32 bits of 64-bit product = 0
+    assertEquals(0, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testMulhsu(dut):
+    "mulhsu: upper 32 bits of signed(rs1) * unsigned(rs2)"
+    await preTestSetup(dut, '''
+        addi x1,x0,-1
+        addi x2,x0,2
+        mulhsu x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 4)
+    # (-1) * 2 (unsigned 2) = -2, 64-bit = 0xFFFFFFFFFFFFFFFE, upper 32 = 0xFFFFFFFF
+    # cocotb .value.integer is unsigned; compare as 32-bit value
+    assertEquals(0xFFFFFFFF, dut.datapath.rf.regs[3].value.integer & 0xFFFFFFFF, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testMulhu(dut):
+    "mulhu: upper 32 bits of unsigned(rs1) * unsigned(rs2)"
+    await preTestSetup(dut, '''
+        addi x1,x0,1
+        slli x1,x1,31
+        addi x2,x0,2
+        mulhu x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 5)
+    # (1<<31) * 2 = 1<<32, upper 32 bits = 1
+    assertEquals(1, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testDiv(dut):
+    "div: signed division"
+    await preTestSetup(dut, '''
+        addi x1,x0,23
+        addi x2,x0,4
+        div x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 4)
+    assertEquals(5, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testDivu(dut):
+    "divu: unsigned division"
+    await preTestSetup(dut, '''
+        addi x1,x0,23
+        addi x2,x0,4
+        divu x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 4)
+    assertEquals(5, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testRem(dut):
+    "rem: signed remainder"
+    await preTestSetup(dut, '''
+        addi x1,x0,23
+        addi x2,x0,4
+        rem x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 4)
+    assertEquals(3, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
+@cocotb.test(skip='RVTEST_ALUBR' in os.environ)
+async def testRemu(dut):
+    "remu: unsigned remainder"
+    await preTestSetup(dut, '''
+        addi x1,x0,23
+        addi x2,x0,4
+        remu x3,x1,x2''')
+
+    await ClockCycles(dut.clock_proc, 4)
+    assertEquals(3, dut.datapath.rf.regs[3].value.integer, f'failed at cycle {dut.datapath.cycles_current.value.integer}')
+
 @cocotb.test()
 async def testTraceRvLui(dut):
     "Use the LUI riscv-test with trace comparison"

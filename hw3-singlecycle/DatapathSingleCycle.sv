@@ -244,6 +244,24 @@ module DatapathSingleCycle (
     .cin(adder_cin),
     .sum(adder_sum));
 
+  logic [63:0] mul_ss;
+  logic [63:0] mul_su;
+  logic [63:0] mul_uu;
+  assign mul_ss = $signed({{32{rs1_data[31]}}, rs1_data}) * $signed({{32{rs2_data[31]}}, rs2_data});
+  assign mul_su = $signed({{32{rs1_data[31]}}, rs1_data}) * $unsigned({32'b0, rs2_data});
+  assign mul_uu = $unsigned({32'b0, rs1_data}) * $unsigned({32'b0, rs2_data});
+
+
+  wire [`REG_SIZE] remainder;
+  wire [`REG_SIZE] quotient;
+  logic [`REG_SIZE] dividend;
+  logic [`REG_SIZE] divisor;
+  DividerUnsigned divider (
+    .i_dividend(dividend),
+    .i_divisor(divisor),
+    .o_remainder(remainder),
+    .o_quotient(quotient));
+
   logic illegal_insn;
 
   always_comb begin
@@ -253,10 +271,14 @@ module DatapathSingleCycle (
     adder_a = 32'd0;
     adder_b = 32'd0;
     adder_cin = 1'b0;
+    dividend = 32'd0;
+    divisor = 32'd0;
     halt = 1'b0;
     branch_taken = 1'b0;
-
     pcNext = pcCurrent + 4;
+    addr_to_dmem = 32'd0;
+    store_data_to_dmem = 32'd0;
+    store_we_to_dmem = 4'b0;
 
     case (insn_opcode)
       OpLui: begin
@@ -316,6 +338,30 @@ module DatapathSingleCycle (
           rd_data = rs1_data | rs2_data;
         end else if (insn_and) begin
           rd_data = rs1_data & rs2_data;
+        end else if (insn_mul) begin 
+          rd_data = rs1_data * rs2_data;
+        end else if (insn_mulh) begin
+          rd_data = mul_ss[63:32];
+        end else if (insn_mulhsu) begin
+          rd_data = mul_su[63:32];
+        end else if (insn_mulhu) begin
+          rd_data = mul_uu[63:32];
+        end else if (insn_div) begin
+          dividend = $signed(rs1_data);
+          divisor = $signed(rs2_data);
+          rd_data = quotient;
+        end else if (insn_divu) begin
+          dividend = $unsigned(rs1_data);
+          divisor = $unsigned(rs2_data);
+          rd_data = quotient;
+        end else if (insn_rem) begin
+          dividend = $signed(rs1_data);
+          divisor = $signed(rs2_data);
+          rd_data = remainder;
+        end else if (insn_remu) begin
+          dividend = $unsigned(rs1_data);
+          divisor = $unsigned(rs2_data);
+          rd_data = remainder;
         end
       end
       OpBranch: begin
@@ -335,6 +381,55 @@ module DatapathSingleCycle (
         
         if (branch_taken) begin
           pcNext = pcCurrent + imm_b_sext;
+        end
+      end
+      OpLoad: begin
+        we = 1'b1;
+        adder_a = rs1_data;
+        adder_b = imm_i_sext;
+        adder_cin = 1'b0;
+        addr_to_dmem = {adder_sum[31:2], 2'b0};
+        if (insn_lw) begin
+          rd_data = load_data_from_dmem;
+        end else if (insn_lh) begin
+          rd_data = (adder_sum[1]) ? {{16{load_data_from_dmem[31]}}, load_data_from_dmem[31:16]} : {{16{load_data_from_dmem[15]}}, load_data_from_dmem[15:0]};
+        end else if (insn_lhu) begin
+          rd_data = (adder_sum[1]) ? {16'b0, load_data_from_dmem[31:16]} : {16'b0, load_data_from_dmem[15:0]};
+        end else if (insn_lb) begin
+          case (adder_sum[1:0])
+            2'b00: rd_data = {{24{load_data_from_dmem[7]}}, load_data_from_dmem[7:0]};
+            2'b01: rd_data = {{24{load_data_from_dmem[15]}}, load_data_from_dmem[15:8]};
+            2'b10: rd_data = {{24{load_data_from_dmem[23]}}, load_data_from_dmem[23:16]};
+            2'b11: rd_data = {{24{load_data_from_dmem[31]}}, load_data_from_dmem[31:24]};
+          endcase
+        end else if (insn_lbu) begin
+          case (adder_sum[1:0])
+            2'b00: rd_data = {24'b0, load_data_from_dmem[7:0]};
+            2'b01: rd_data = {24'b0, load_data_from_dmem[15:8]};
+            2'b10: rd_data = {24'b0, load_data_from_dmem[23:16]};
+            2'b11: rd_data = {24'b0, load_data_from_dmem[31:24]};
+          endcase
+        end
+      end
+      OpStore: begin
+        adder_a = rs1_data;
+        adder_b = imm_s_sext;
+        adder_cin = 1'b0;
+        addr_to_dmem = {adder_sum[31:2], 2'b0};
+        if (insn_sw) begin
+          store_data_to_dmem = rs2_data;
+          store_we_to_dmem = 4'b1111;
+        end else if (insn_sh) begin
+          store_data_to_dmem = (adder_sum[1]) ? {rs2_data[15:0], 16'b0} : {16'b0, rs2_data[15:0]};
+          store_we_to_dmem = (adder_sum[1]) ? 4'b1100 : 4'b0011;
+        end else if (insn_sb) begin
+          store_data_to_dmem = {4{rs2_data[7:0]}};
+          case (adder_sum[1:0])
+            2'b00: store_we_to_dmem = 4'b0001;
+            2'b01: store_we_to_dmem = 4'b0010;
+            2'b10: store_we_to_dmem = 4'b0100;
+            2'b11: store_we_to_dmem = 4'b1000;
+          endcase
         end
       end
       OpEnviron: begin
