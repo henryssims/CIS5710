@@ -47,6 +47,75 @@ module MyClockGen (
 		.LOCK(locked)
 	);
 endmodule
+module DividerUnsigned (
+	i_dividend,
+	i_divisor,
+	o_remainder,
+	o_quotient
+);
+	input wire [31:0] i_dividend;
+	input wire [31:0] i_divisor;
+	output wire [31:0] o_remainder;
+	output wire [31:0] o_quotient;
+	wire [31:0] dividends [0:32];
+	wire [31:0] remainders [0:32];
+	wire [31:0] quotients [0:32];
+	assign dividends[0] = i_dividend;
+	assign quotients[0] = 32'b00000000000000000000000000000000;
+	assign remainders[0] = 32'b00000000000000000000000000000000;
+	genvar _gv_i_1;
+	generate
+		for (_gv_i_1 = 0; _gv_i_1 < 32; _gv_i_1 = _gv_i_1 + 1) begin : genblk1
+			localparam i = _gv_i_1;
+			DividerOneIter d(
+				.i_dividend(dividends[i]),
+				.i_divisor(i_divisor),
+				.i_remainder(remainders[i]),
+				.i_quotient(quotients[i]),
+				.o_dividend(dividends[i + 1]),
+				.o_remainder(remainders[i + 1]),
+				.o_quotient(quotients[i + 1])
+			);
+		end
+	endgenerate
+	assign o_remainder = remainders[32];
+	assign o_quotient = quotients[32];
+endmodule
+module DividerOneIter (
+	i_dividend,
+	i_divisor,
+	i_remainder,
+	i_quotient,
+	o_dividend,
+	o_remainder,
+	o_quotient
+);
+	reg _sv2v_0;
+	input wire [31:0] i_dividend;
+	input wire [31:0] i_divisor;
+	input wire [31:0] i_remainder;
+	input wire [31:0] i_quotient;
+	output wire [31:0] o_dividend;
+	output wire [31:0] o_remainder;
+	output wire [31:0] o_quotient;
+	wire [31:0] remainder_new = (i_remainder << 1) | ((i_dividend >> 31) & 32'b00000000000000000000000000000001);
+	reg [31:0] quotient;
+	reg [31:0] remainder_subtracted;
+	always @(*) begin
+		if (_sv2v_0)
+			;
+		quotient = i_quotient << 1;
+		remainder_subtracted = remainder_new;
+		if (remainder_new >= i_divisor) begin
+			quotient = quotient | 32'b00000000000000000000000000000001;
+			remainder_subtracted = remainder_subtracted - i_divisor;
+		end
+	end
+	assign o_dividend = i_dividend << 1;
+	assign o_remainder = remainder_subtracted;
+	assign o_quotient = quotient;
+	initial _sv2v_0 = 0;
+endmodule
 module gp1 (
 	a,
 	b,
@@ -249,10 +318,10 @@ module DatapathSingleCycle (
 	output reg halt;
 	output wire [31:0] pc_to_imem;
 	input wire [31:0] insn_from_imem;
-	output wire [31:0] addr_to_dmem;
+	output reg [31:0] addr_to_dmem;
 	input wire [31:0] load_data_from_dmem;
-	output wire [31:0] store_data_to_dmem;
-	output wire [3:0] store_we_to_dmem;
+	output reg [31:0] store_data_to_dmem;
+	output reg [3:0] store_we_to_dmem;
 	output wire [31:0] trace_completed_pc;
 	output wire [31:0] trace_completed_insn;
 	output wire [31:0] trace_completed_cycle_status;
@@ -385,6 +454,22 @@ module DatapathSingleCycle (
 		.cin(adder_cin),
 		.sum(adder_sum)
 	);
+	wire [63:0] mul_ss;
+	wire [63:0] mul_su;
+	wire [63:0] mul_uu;
+	assign mul_ss = $signed({{32 {rs1_data[31]}}, rs1_data}) * $signed({{32 {rs2_data[31]}}, rs2_data});
+	assign mul_su = $signed({{32 {rs1_data[31]}}, rs1_data}) * $unsigned({32'b00000000000000000000000000000000, rs2_data});
+	assign mul_uu = $unsigned({32'b00000000000000000000000000000000, rs1_data}) * $unsigned({32'b00000000000000000000000000000000, rs2_data});
+	wire [31:0] remainder;
+	wire [31:0] quotient;
+	reg [31:0] dividend;
+	reg [31:0] divisor;
+	DividerUnsigned divider(
+		.i_dividend(dividend),
+		.i_divisor(divisor),
+		.o_remainder(remainder),
+		.o_quotient(quotient)
+	);
 	reg illegal_insn;
 	always @(*) begin
 		if (_sv2v_0)
@@ -395,13 +480,22 @@ module DatapathSingleCycle (
 		adder_a = 32'd0;
 		adder_b = 32'd0;
 		adder_cin = 1'b0;
+		dividend = 32'd0;
+		divisor = 32'd0;
 		halt = 1'b0;
 		branch_taken = 1'b0;
 		pcNext = pcCurrent + 4;
+		addr_to_dmem = 32'd0;
+		store_data_to_dmem = 32'd0;
+		store_we_to_dmem = 4'b0000;
 		case (insn_opcode)
 			OpLui: begin
 				we = 1'b1;
 				rd_data = {imm_u, 12'b000000000000};
+			end
+			OpAuipc: begin
+				we = 1'b1;
+				rd_data = pcCurrent + {imm_u, 12'b000000000000};
 			end
 			OpRegImm: begin
 				we = 1'b1;
@@ -458,6 +552,52 @@ module DatapathSingleCycle (
 					rd_data = rs1_data | rs2_data;
 				else if (insn_and)
 					rd_data = rs1_data & rs2_data;
+				else if (insn_mul)
+					rd_data = rs1_data * rs2_data;
+				else if (insn_mulh)
+					rd_data = mul_ss[63:32];
+				else if (insn_mulhsu)
+					rd_data = mul_su[63:32];
+				else if (insn_mulhu)
+					rd_data = mul_uu[63:32];
+				else if (insn_div) begin
+					if (rs2_data == 32'd0)
+						rd_data = 32'hffffffff;
+					else begin
+						dividend = (rs1_data[31] ? ~rs1_data + 1 : rs1_data);
+						divisor = (rs2_data[31] ? ~rs2_data + 1 : rs2_data);
+						rd_data = (rs1_data[31] ^ rs2_data[31] ? ~quotient + 1 : quotient);
+					end
+				end
+				else if (insn_divu) begin
+					dividend = rs1_data;
+					divisor = rs2_data;
+					rd_data = quotient;
+				end
+				else if (insn_rem) begin
+					if (rs2_data == 32'd0)
+						rd_data = rs1_data;
+					else begin
+						dividend = (rs1_data[31] ? ~rs1_data + 1 : rs1_data);
+						divisor = (rs2_data[31] ? ~rs2_data + 1 : rs2_data);
+						rd_data = (rs1_data[31] ? ~remainder + 1 : remainder);
+					end
+				end
+				else if (insn_remu) begin
+					dividend = rs1_data;
+					divisor = rs2_data;
+					rd_data = remainder;
+				end
+			end
+			OpJal: begin
+				we = 1'b1;
+				rd_data = pcCurrent + 4;
+				pcNext = pcCurrent + imm_j_sext;
+			end
+			OpJalr: begin
+				we = 1'b1;
+				rd_data = pcCurrent + 4;
+				pcNext = (rs1_data + imm_i_sext) & ~32'b00000000000000000000000000000001;
 			end
 			OpBranch: begin
 				if (insn_beq)
@@ -474,6 +614,56 @@ module DatapathSingleCycle (
 					branch_taken = $unsigned(rs1_data) >= $unsigned(rs2_data);
 				if (branch_taken)
 					pcNext = pcCurrent + imm_b_sext;
+			end
+			OpLoad: begin
+				we = 1'b1;
+				adder_a = rs1_data;
+				adder_b = imm_i_sext;
+				adder_cin = 1'b0;
+				addr_to_dmem = {adder_sum[31:2], 2'b00};
+				if (insn_lw)
+					rd_data = load_data_from_dmem;
+				else if (insn_lh)
+					rd_data = (adder_sum[1] ? {{16 {load_data_from_dmem[31]}}, load_data_from_dmem[31:16]} : {{16 {load_data_from_dmem[15]}}, load_data_from_dmem[15:0]});
+				else if (insn_lhu)
+					rd_data = (adder_sum[1] ? {16'b0000000000000000, load_data_from_dmem[31:16]} : {16'b0000000000000000, load_data_from_dmem[15:0]});
+				else if (insn_lb)
+					case (adder_sum[1:0])
+						2'b00: rd_data = {{24 {load_data_from_dmem[7]}}, load_data_from_dmem[7:0]};
+						2'b01: rd_data = {{24 {load_data_from_dmem[15]}}, load_data_from_dmem[15:8]};
+						2'b10: rd_data = {{24 {load_data_from_dmem[23]}}, load_data_from_dmem[23:16]};
+						2'b11: rd_data = {{24 {load_data_from_dmem[31]}}, load_data_from_dmem[31:24]};
+					endcase
+				else if (insn_lbu)
+					case (adder_sum[1:0])
+						2'b00: rd_data = {24'b000000000000000000000000, load_data_from_dmem[7:0]};
+						2'b01: rd_data = {24'b000000000000000000000000, load_data_from_dmem[15:8]};
+						2'b10: rd_data = {24'b000000000000000000000000, load_data_from_dmem[23:16]};
+						2'b11: rd_data = {24'b000000000000000000000000, load_data_from_dmem[31:24]};
+					endcase
+			end
+			OpStore: begin
+				adder_a = rs1_data;
+				adder_b = imm_s_sext;
+				adder_cin = 1'b0;
+				addr_to_dmem = {adder_sum[31:2], 2'b00};
+				if (insn_sw) begin
+					store_data_to_dmem = rs2_data;
+					store_we_to_dmem = 4'b1111;
+				end
+				else if (insn_sh) begin
+					store_data_to_dmem = (adder_sum[1] ? {rs2_data[15:0], 16'b0000000000000000} : {16'b0000000000000000, rs2_data[15:0]});
+					store_we_to_dmem = (adder_sum[1] ? 4'b1100 : 4'b0011);
+				end
+				else if (insn_sb) begin
+					store_data_to_dmem = {4 {rs2_data[7:0]}};
+					case (adder_sum[1:0])
+						2'b00: store_we_to_dmem = 4'b0001;
+						2'b01: store_we_to_dmem = 4'b0010;
+						2'b10: store_we_to_dmem = 4'b0100;
+						2'b11: store_we_to_dmem = 4'b1000;
+					endcase
+				end
 			end
 			OpEnviron:
 				if (insn_ecall)

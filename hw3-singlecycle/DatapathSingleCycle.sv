@@ -263,29 +263,6 @@ module DatapathSingleCycle (
     .o_quotient(quotient));
 
   logic illegal_insn;
-  MemorySingleCycle m (
-    .rst(rst),
-    .clock_mem(clock),
-
-    // must always be aligned to a 4B boundary
-    input wire [`REG_SIZE] pc_to_imem,
-
-    // the value at memory location pc_to_imem
-    output logic [`INSN_SIZE] insn_from_imem,
-
-    // must always be aligned to a 4B boundary
-    input wire [`REG_SIZE] addr_to_dmem,
-
-    // the value at memory location addr_to_dmem
-    output logic [`REG_SIZE] load_data_from_dmem,
-
-    // the value to be written to addr_to_dmem, controlled by store_we_to_dmem
-    input wire [`REG_SIZE] store_data_to_dmem,
-
-    // Each bit determines whether to write the corresponding byte of store_data_to_dmem to memory location addr_to_dmem.
-    // E.g., 4'b1111 will write 4 bytes. 4'b0001 will write only the least-significant byte.
-    input wire [3:0] store_we_to_dmem
-);
 
   always_comb begin
     illegal_insn = 1'b0;
@@ -374,20 +351,28 @@ module DatapathSingleCycle (
         end else if (insn_mulhu) begin
           rd_data = mul_uu[63:32];
         end else if (insn_div) begin
-          dividend = $signed(rs1_data);
-          divisor = $signed(rs2_data);
-          rd_data = quotient;
+          if (rs2_data == 32'd0) begin
+            rd_data = 32'hFFFFFFFF;
+          end else begin
+            dividend = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
+            divisor = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
+            rd_data = (rs1_data[31] ^ rs2_data[31]) ? (~quotient + 1) : quotient;
+          end
         end else if (insn_divu) begin
-          dividend = $unsigned(rs1_data);
-          divisor = $unsigned(rs2_data);
+          dividend = rs1_data;
+          divisor = rs2_data;
           rd_data = quotient;
         end else if (insn_rem) begin
-          dividend = $signed(rs1_data);
-          divisor = $signed(rs2_data);
-          rd_data = remainder;
+          if (rs2_data == 32'd0) begin
+            rd_data = rs1_data;
+          end else begin
+            dividend = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
+            divisor = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
+            rd_data = rs1_data[31] ? (~remainder + 1) : remainder;
+          end
         end else if (insn_remu) begin
-          dividend = $unsigned(rs1_data);
-          divisor = $unsigned(rs2_data);
+          dividend = rs1_data;
+          divisor = rs2_data;
           rd_data = remainder;
         end
       end
