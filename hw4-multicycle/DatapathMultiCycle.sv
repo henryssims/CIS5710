@@ -499,7 +499,7 @@ module DatapathMultiCycle (
   assign trace_completed_pc = pcCurrent;
   assign trace_completed_insn = insn_from_imem;
   assign trace_completed_cycle_status =
-      (divide_in_progress && div_cycle_cnt < 4'd9) ? CYCLE_DIV : CYCLE_NO_STALL;
+      ((divide_in_progress && div_cycle_cnt < 4'd7) || (is_divide_op && !divide_in_progress)) ? CYCLE_DIV : CYCLE_NO_STALL;
 
 endmodule
 
