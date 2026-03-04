@@ -170,6 +170,8 @@ module DatapathMultiCycle (
   wire insn_rem    = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b110;
   wire insn_remu   = insn_opcode == OpRegReg && insn_from_imem[31:25] == 7'd1 && insn_from_imem[14:12] == 3'b111;
 
+  wire is_divide_op = insn_div | insn_divu | insn_rem | insn_remu;
+
   wire insn_ecall = insn_opcode == OpEnviron && insn_from_imem[31:7] == 25'd0;
   wire insn_fence = insn_opcode == OpMiscMem;
 
@@ -198,6 +200,30 @@ module DatapathMultiCycle (
     end
   end
   assign pc_to_imem = pcCurrent;
+
+  // Multi-cycle divide state (div/divu/rem/remu take 9 cycles)
+  logic divide_in_progress;
+  logic [3:0] div_cycle_cnt;  // 0 to 8
+
+  // Divide state machine: div/divu/rem/remu take 9 cycles
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      divide_in_progress <= 1'b0;
+      div_cycle_cnt <= 4'd0;
+    end else begin
+      if (divide_in_progress) begin
+        if (div_cycle_cnt < 4'd7) begin
+          div_cycle_cnt <= div_cycle_cnt + 1;
+        end else begin
+          divide_in_progress <= 1'b0;
+          div_cycle_cnt <= 4'd0;
+        end
+      end else if (is_divide_op) begin
+        divide_in_progress <= 1'b1;
+        div_cycle_cnt <= 4'd0;
+      end
+    end
+  end
 
   // cycle/insn_from_imem counters
   logic [`REG_SIZE] cycles_current, num_insns_current;
@@ -353,29 +379,29 @@ module DatapathMultiCycle (
         end else if (insn_mulhu) begin
           rd_data = mul_uu[63:32];
         end else if (insn_div) begin
-          if (rs2_data == 32'd0) begin
-            rd_data = 32'hFFFFFFFF;
-          end else begin
-            dividend = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
-            divisor = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
-            rd_data = (rs1_data[31] ^ rs2_data[31]) ? (~quotient + 1) : quotient;
-          end
+          dividend = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
+          divisor = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
+          we = (div_cycle_cnt == 4'd7);
+          if (div_cycle_cnt == 4'd7)
+            rd_data = (rs2_data == 32'd0) ? 32'hFFFFFFFF : ((rs1_data[31] ^ rs2_data[31]) ? (~quotient + 1) : quotient);
         end else if (insn_divu) begin
           dividend = rs1_data;
           divisor = rs2_data;
-          rd_data = quotient;
+          we = (div_cycle_cnt == 4'd7);
+          if (div_cycle_cnt == 4'd7)
+            rd_data = (rs2_data == 32'd0) ? 32'hFFFFFFFF : quotient;
         end else if (insn_rem) begin
-          if (rs2_data == 32'd0) begin
-            rd_data = rs1_data;
-          end else begin
-            dividend = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
-            divisor = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
-            rd_data = rs1_data[31] ? (~remainder + 1) : remainder;
-          end
+          dividend = rs1_data[31] ? (~rs1_data + 1) : rs1_data;
+          divisor = rs2_data[31] ? (~rs2_data + 1) : rs2_data;
+          we = (div_cycle_cnt == 4'd7);
+          if (div_cycle_cnt == 4'd7)
+            rd_data = (rs2_data == 32'd0) ? rs1_data : (rs1_data[31] ? (~remainder + 1) : remainder);
         end else if (insn_remu) begin
           dividend = rs1_data;
           divisor = rs2_data;
-          rd_data = remainder;
+          we = (div_cycle_cnt == 4'd7);
+          if (div_cycle_cnt == 4'd7)
+            rd_data = (rs2_data == 32'd0) ? rs1_data : remainder;
         end
       end
       OpJal: begin
@@ -465,11 +491,15 @@ module DatapathMultiCycle (
         illegal_insn = 1'b1;
       end
     endcase
+    // Stall PC during 9-cycle divide operations (override any case above)
+    if ((divide_in_progress && div_cycle_cnt < 4'd7) || (is_divide_op && !divide_in_progress))
+      pcNext = pcCurrent;
   end
 
   assign trace_completed_pc = pcCurrent;
   assign trace_completed_insn = insn_from_imem;
-  assign trace_completed_cycle_status = CYCLE_NO_STALL;
+  assign trace_completed_cycle_status =
+      (divide_in_progress && div_cycle_cnt < 4'd9) ? CYCLE_DIV : CYCLE_NO_STALL;
 
 endmodule
 
