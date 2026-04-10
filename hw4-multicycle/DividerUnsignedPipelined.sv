@@ -5,7 +5,7 @@
 // quotient = dividend / divisor
 
 module DividerUnsignedPipelined (
-    input wire clk, rst, stall,
+    input wire clk, rst, stall, flush,
     input  wire  [31:0] i_dividend,
     input  wire  [31:0] i_divisor,
     output logic [31:0] o_remainder,
@@ -38,11 +38,16 @@ module DividerUnsignedPipelined (
         divu_1iter iter3(d3, divisor_pipe[i], r3, q3, d4, r4, q4);
 
         always_ff @(posedge clk) begin
-            if (rst) begin
+            if (rst || flush) begin
                 dividend_pipe[i+1]  <= 32'b0;
                 remainder_pipe[i+1] <= 32'b0;
                 quotient_pipe[i+1]  <= 32'b0;
                 divisor_pipe[i+1]   <= 32'b0;
+            end else if (stall) begin
+                dividend_pipe[i+1]  <= dividend_pipe[i+1];
+                remainder_pipe[i+1] <= remainder_pipe[i+1];
+                quotient_pipe[i+1]  <= quotient_pipe[i+1];
+                divisor_pipe[i+1]   <= divisor_pipe[i+1];
             end else begin
                 dividend_pipe[i+1]  <= d4;
                 remainder_pipe[i+1] <= r4;

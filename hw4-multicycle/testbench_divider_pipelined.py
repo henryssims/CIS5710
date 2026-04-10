@@ -25,6 +25,8 @@ async def preTestSetup(dut):
     await ClockCycles(dut.clk, 2)
     # lower `rst` signal
     dut.rst.value = 0
+    dut.stall.value = 0
+    dut.flush.value = 0
     # design should be reset now
     return
 

@@ -284,6 +284,7 @@ module DatapathMultiCycle (
     .clk(clk),
     .rst(rst),
     .stall(1'b0),
+    .flush(1'b0),
     .i_dividend(dividend),
     .i_divisor(divisor),
     .o_remainder(remainder),
