@@ -1,7 +1,29 @@
 `timescale 1ns / 1ns
 
+// REFERENCE CODE
+
 `define ADDR_WIDTH 32
 `define DATA_WIDTH 32
+
+/** encode a 1-hot signal into binary */
+module encoder #(
+    parameter int INPUT_WIDTH
+) (
+    input  logic [INPUT_WIDTH-1:0] one_hot,
+    output logic [1 == INPUT_WIDTH ? 0 : $clog2(INPUT_WIDTH)-1:0] binary
+);
+    always_comb begin
+`ifndef SYNTHESIS
+        assert (1 == INPUT_WIDTH || $onehot(one_hot)) else $error("Input is not 1-hot encoded!");
+`endif
+        binary = '0; // Default value
+        for (int i = 0; i < INPUT_WIDTH; i++) begin
+            if (one_hot[i]) begin
+                binary = i[1 == INPUT_WIDTH ? 0 : $clog2(INPUT_WIDTH)-1:0];
+            end
+        end
+    end
+endmodule
 
 interface axi_if #(
       parameter int ADDR_WIDTH = 32
@@ -52,6 +74,10 @@ module AxilMemory #(
 ) (
     input wire ACLK,
     input wire ARESETn,
+`ifdef RISCV_FORMAL
+    input wire [`DATA_WIDTH] random_insn,
+    input wire [`DATA_WIDTH] random_data,
+`endif
     axi_if.subord port_ro,
     axi_if.subord port_rw
 );
@@ -60,15 +86,17 @@ module AxilMemory #(
   localparam int AddrLsb = 2;  // since memory elements are 4B
   localparam int AddrMsb = $clog2(NUM_WORDS) + AddrLsb - 1;
 
+`ifndef RISCV_FORMAL
   logic [31:0] mem_array[NUM_WORDS];
+`endif
   logic [31:0] ro_araddr;
   logic ro_araddr_valid;
 
-  initial begin
 `ifdef SYNTHESIS
-    $readmemh("mem_initial_contents.hex", mem_array);
-`endif
+  initial begin
+    $readmemh("mem_initial_contents.hex",mem_array);
   end
+`endif
 
   assign port_ro.RRESP = `RESP_OK;
   assign port_ro.BRESP = `RESP_OK;
@@ -100,7 +128,11 @@ module AxilMemory #(
         if (port_ro.RREADY) begin
           // manager accepted our response, we generate next response
           port_ro.RVALID <= True;
+`ifdef RISCV_FORMAL
+          port_ro.RDATA <= random_insn;
+`else
           port_ro.RDATA  <= mem_array[ro_araddr[AddrMsb:AddrLsb]];
+`endif
           ro_araddr <= 0;
           ro_araddr_valid <= False;
           port_ro.ARREADY <= True;
@@ -116,7 +148,11 @@ module AxilMemory #(
           // We have sent a response and manager has accepted it. Or, we were not already sending a response.
           // Either way, send a response to the request we just accepted.
           port_ro.RVALID <= True;
+`ifdef RISCV_FORMAL
+          port_ro.RDATA <= random_insn;
+`else
           port_ro.RDATA  <= mem_array[port_ro.ARADDR[AddrMsb:AddrLsb]];
+`endif
         end
       end else if (port_ro.RVALID && port_ro.RREADY) begin
         // No incoming request. We have sent a response and manager has accepted it
@@ -131,13 +167,18 @@ module AxilMemory #(
       // as 1) the datapath never stalls in the W stage and 2) the cache is always ready
       if (port_rw.ARVALID && port_rw.ARREADY) begin
         port_rw.RVALID <= True;
+`ifdef RISCV_FORMAL
+        port_rw.RDATA <= random_data;
+`else
         port_rw.RDATA  <= mem_array[port_rw.ARADDR[AddrMsb:AddrLsb]];
+`endif
       end else if (port_rw.RVALID) begin
         port_rw.RVALID <= False;
         port_rw.RDATA  <= 0;
       end
 
       if (port_rw.AWVALID && port_rw.AWREADY && port_rw.WVALID && port_rw.WREADY) begin
+`ifndef RISCV_FORMAL
         if (port_rw.WSTRB[0]) begin
           mem_array[port_rw.AWADDR[AddrMsb:AddrLsb]][7:0] <= port_rw.WDATA[7:0];
         end
@@ -150,6 +191,7 @@ module AxilMemory #(
         if (port_rw.WSTRB[3]) begin
           mem_array[port_rw.AWADDR[AddrMsb:AddrLsb]][31:24] <= port_rw.WDATA[31:24];
         end
+`endif
         port_rw.BVALID <= True;
       end else if (port_rw.BVALID) begin
         port_rw.BVALID <= False;
@@ -159,21 +201,18 @@ module AxilMemory #(
 
 endmodule
 
-// States for cache state machine. You can change these if you want.
 typedef enum {
-  // cache can respond to an incoming request
   CACHE_AVAILABLE = 0,
-  // cache miss, waiting for fill from memory
   CACHE_AWAIT_FILL_RESPONSE = 1,
-  // cache miss, waiting for writeback to memory
   CACHE_AWAIT_WRITEBACK_RESPONSE = 2,
-  // cache waiting for manager to accept response
   CACHE_AWAIT_MANAGER_READY = 3
 } cache_state_t;
 
 module AxilCache #(
     /** size of each cache block, in bits */
     parameter int BLOCK_SIZE_BITS = 32,
+    /** associativity of the cache */
+    parameter int WAYS = 1,
     /** number of blocks in each way of the cache */
     parameter int NUM_SETS = 4
 ) (
@@ -183,62 +222,375 @@ module AxilCache #(
     axi_if.manager mem
 );
 
-  // TODO: calculate these
-  localparam int BlockOffsetBits = 0;
-  localparam int IndexBits = 0;
-  localparam int TagBits = 0;
+  localparam int BlockOffsetBits = $clog2(BLOCK_SIZE_BITS / 8);
+  localparam int IndexBits = $clog2(NUM_SETS);
+  localparam int TagBits = proc.ADDR_WIDTH - (IndexBits + BlockOffsetBits);
+  localparam int AddrMsb = (IndexBits + BlockOffsetBits) - 1;
+
+  // veril8or 5.030 can't expose packed arrays to cocotb, unfortunately, fields are packed into a single bit string.
+  // cocotb also cannot access an unpacked array of bits like `logic foo[LEN]`.
+  // With `logic [LEN-1:0] foo`, cocotb sees an int and we can read, but not write, individual bits via indexing.
+  // However, with a bit inside a packed struct wrapper, cocotb can index it naturally!
+  typedef struct packed {
+      logic l;
+  } lru_t;
 
   // cache state
   cache_state_t current_state;
-  // main cache structures: do not rename as tests reference these names
+  // logic [BLOCK_SIZE_BITS-1:0] data[NUM_SETS][WAYS];
+  // logic [TagBits-1:0] tag[NUM_SETS][WAYS];
   logic [BLOCK_SIZE_BITS-1:0] data[NUM_SETS];
   logic [TagBits-1:0] tag[NUM_SETS];
-  logic [0:0] valid[NUM_SETS];
-  logic [0:0] dirty[NUM_SETS];
+  logic [WAYS-1:0] valid[NUM_SETS];
+  logic [WAYS-1:0] dirty[NUM_SETS];
+  lru_t lru[NUM_SETS];
 
   // initialize cache state to all zeroes
-  genvar seti;
+  genvar seti, wayi;
   for (seti = 0; seti < NUM_SETS; seti = seti + 1) begin : gen_cache_init
     initial begin
       valid[seti] = '0;
       dirty[seti] = '0;
+      lru[seti] = '0;
       data[seti] = 0;
       tag[seti] = 0;
     end
   end
 
+`ifndef FORMAL
   always_comb begin
-    // addresses should always be 4B-aligned
+    // TODO: generalize LRU state
+    assert (WAYS <= 2);
+    // memory addresses should always be 4B-aligned
     assert (!proc.ARVALID || proc.ARADDR[1:0] == 2'b00);
-    assert (proc.ARPROT == 3'd0);
     assert (!proc.AWVALID || proc.AWADDR[1:0] == 2'b00);
-    assert (proc.AWPROT == 3'd0);
     // cache is single-ported
     assert (!(proc.ARVALID && (proc.AWVALID || proc.WVALID)));
   end
-  // the cache never raises any errors
+`endif
+  // our cache never raises any errors
   assign proc.RRESP = `RESP_OK;
   assign proc.BRESP = `RESP_OK;
 
-  // TODO: the rest of your changes will go below
+  // cache lookup (pure combinational)
+  localparam bit True = 1'b1;
+  localparam bit False = 1'b0;
+  wire [proc.ADDR_WIDTH-1:0] req_addr = proc.ARVALID ? proc.ARADDR : proc.AWVALID ? proc.AWADDR : 0;
+  wire [IndexBits-1:0] cache_index = req_addr[AddrMsb -: IndexBits];
+  wire [TagBits-1:0] req_tag = req_addr[proc.ADDR_WIDTH-1 -: TagBits];
+  wire is_read_request = (proc.ARVALID && proc.ARREADY);
+  wire is_write_request = (proc.AWVALID && proc.WVALID && proc.AWREADY && proc.WREADY);
+  wire is_request = is_read_request || is_write_request;
+  // either we're not sending a response, or our response was accepted
+  wire can_send_new_response = !proc.RVALID || (proc.RVALID && proc.RREADY);
+  wire [WAYS-1:0] way_hit_1hot;
+  for (wayi = 0; wayi < WAYS; wayi = wayi + 1) begin: gen_way_hit
+    // assign way_hit_1hot[wayi] = valid[cache_index][wayi] && (tag[cache_index][wayi] == req_tag);
+    assign way_hit_1hot[wayi] = valid[cache_index][wayi] && (tag[cache_index] == req_tag);
+  end
+  wire [1 == WAYS ? 0 : $clog2(WAYS)-1:0] way_hit_index;
+  encoder #(.INPUT_WIDTH(WAYS)) way_encoder (.one_hot(way_hit_1hot), .binary(way_hit_index));
+  wire cache_hit = |way_hit_1hot;
+  wire is_read = proc.ARVALID;
+
+  wire victim_way_index = 1 == WAYS ? 0 : lru[cache_index].l;
+  wire victim_is_dirty = dirty[cache_index][victim_way_index];
+  // wire [proc.ADDR_WIDTH-1:0] victim_addr = {tag[cache_index][victim_way_index],cache_index,{BlockOffsetBits{1'b0}}};
+  wire [proc.ADDR_WIDTH-1:0] victim_addr = {tag[cache_index],cache_index,{BlockOffsetBits{1'b0}}};
+
+  // TODO: we assume that we cannot have read & write requests in same cycle
+  // TODO: we assume awaddr, wdata & wstrb always arrive in the same cycle
+
+  logic read_miss;
+  typedef struct packed {
+    logic is_read;
+    logic [proc.ADDR_WIDTH-1:0] req_addr;
+    logic [proc.DATA_WIDTH-1:0] wdata;
+    logic [(proc.DATA_WIDTH/8)-1:0] wstrb;
+    logic [IndexBits-1:0] cache_index;
+    logic [TagBits-1:0] tag;
+    logic [1 == WAYS ? 0 : $clog2(WAYS)-1:0] way_hit_index;
+    logic [1 == WAYS ? 0 : $clog2(WAYS)-1:0] victim_way_index;
+  } request_t;
+  request_t saved;
 
   always_ff @(posedge ACLK) begin
-    if (!ARESETn) begin // NB: reset when ARESETn == 0
+    if (!ARESETn) begin
       current_state <= CACHE_AVAILABLE;
+      read_miss <= False;
+      saved <= '0;
+      proc.ARREADY <= True;
+      proc.RVALID <= False;
+      proc.RDATA <= 0;
+
+      proc.AWREADY <= True;
+      proc.WREADY <= True;
+      proc.BVALID <= 0;
+
+      mem.ARVALID <= False;
+      mem.ARADDR <= 0;
+      mem.RREADY <= False;
+
+      mem.AWVALID <= False;
+      mem.AWADDR <= 0;
+      mem.WVALID <= False;
+      mem.WDATA <= 0;
+      mem.WSTRB <= 0;
+      mem.BREADY <= False;
+    end else begin
+      case (current_state)
+        CACHE_AVAILABLE: begin
+          proc.ARREADY <= True;
+          proc.AWREADY <= True;
+          proc.WREADY <= True;
+          if (is_request && !can_send_new_response) begin
+            // manager hasn't accepted our response, stop accepting new requests
+            proc.ARREADY <= False;
+            saved <= '{
+              is_read: is_read,
+              req_addr: req_addr,
+              wstrb: proc.WSTRB,
+              wdata: proc.WDATA,
+              cache_index: cache_index,
+              tag: req_tag,
+              way_hit_index: way_hit_index,
+              victim_way_index: victim_way_index
+            };
+            current_state <= CACHE_AWAIT_MANAGER_READY;
+          end else if (is_request && cache_hit) begin
+            if (can_send_new_response) begin
+              // update lru
+              lru[cache_index].l <= ~way_hit_index;
+              if (is_read) begin
+                proc.RVALID <= True;
+                // proc.RDATA <= data[cache_index][way_hit_index];
+                proc.RDATA <= data[cache_index];
+              end else begin // write
+                proc.BVALID <= True;
+                if (proc.WSTRB[0]) begin
+                  // data[cache_index][way_hit_index][7:0] <= proc.WDATA[7:0];
+                  data[cache_index][7:0] <= proc.WDATA[7:0];
+                  dirty[cache_index][way_hit_index] <= 1;
+                end
+                if (proc.WSTRB[1]) begin
+                  // data[cache_index][way_hit_index][15:8] <= proc.WDATA[15:8];
+                  data[cache_index][15:8] <= proc.WDATA[15:8];
+                  dirty[cache_index][way_hit_index] <= 1;
+                end
+                if (proc.WSTRB[2]) begin
+                  // data[cache_index][way_hit_index][23:16] <= proc.WDATA[23:16];
+                  data[cache_index][23:16] <= proc.WDATA[23:16];
+                  dirty[cache_index][way_hit_index] <= 1;
+                end
+                if (proc.WSTRB[3]) begin
+                  // data[cache_index][way_hit_index][31:24] <= proc.WDATA[31:24];
+                  data[cache_index][31:24] <= proc.WDATA[31:24];
+                  dirty[cache_index][way_hit_index] <= 1;
+                end
+              end
+            end
+          end else if (is_request && !cache_hit) begin
+            proc.ARREADY <= False;
+            proc.AWREADY <= False;
+            proc.WREADY <= False;
+            read_miss <= is_read;
+            saved <= '{
+              is_read: is_read,
+              req_addr: req_addr,
+              wstrb: proc.WSTRB,
+              wdata: proc.WDATA,
+              cache_index: cache_index,
+              tag: req_tag,
+              way_hit_index: way_hit_index,
+              victim_way_index: victim_way_index
+            };
+            if (!victim_is_dirty) begin
+              // clean miss: send read request to memory
+              mem.ARVALID <= True;
+              mem.ARADDR <= req_addr;
+              mem.RREADY <= True;
+              current_state <= CACHE_AWAIT_FILL_RESPONSE;
+`ifndef SYNTHESIS
+              $display("%0t miss-start req_addr=%h proc_rready=%0d proc_rvalid=%0d", $time, req_addr, proc.RREADY, proc.RVALID);
+`endif
+            end else begin
+              // dirty miss: writeback dirty line
+              mem.AWVALID <= True;
+              mem.AWADDR <= victim_addr;
+              mem.WVALID <= True;
+              // mem.WDATA <= data[cache_index][victim_way_index];
+              mem.WDATA <= data[cache_index];
+              mem.WSTRB <= 4'hF;
+              mem.BREADY <= True;
+              current_state <= CACHE_AWAIT_WRITEBACK_RESPONSE;
+            end
+          end
+          if ((proc.RVALID && proc.RREADY) && !(is_read_request && cache_hit)) begin
+            proc.RVALID <= False;
+            proc.RDATA <= 0;
+          end
+          if ((proc.BVALID && proc.BREADY) && !(is_write_request && cache_hit)) begin
+            proc.BVALID <= False;
+          end
+        end
+
+        CACHE_AWAIT_MANAGER_READY: begin
+          if (proc.RREADY) begin
+            logic saved_hit;
+            saved_hit = valid[saved.cache_index][saved.way_hit_index]
+                      && (tag[saved.cache_index] == saved.tag);
+
+            // prior response has now been accepted
+            proc.RVALID <= False;
+            proc.RDATA <= 0;
+
+            if (saved_hit) begin
+              // replay buffered hit request
+              lru[saved.cache_index].l <= ~saved.way_hit_index;
+              if (saved.is_read) begin
+                proc.RVALID <= True;
+                proc.RDATA <= data[saved.cache_index];
+              end else begin
+                proc.BVALID <= True;
+                if (saved.wstrb[0]) begin
+                  data[saved.cache_index][7:0] <= saved.wdata[7:0];
+                  dirty[saved.cache_index][saved.way_hit_index] <= 1;
+                end
+                if (saved.wstrb[1]) begin
+                  data[saved.cache_index][15:8] <= saved.wdata[15:8];
+                  dirty[saved.cache_index][saved.way_hit_index] <= 1;
+                end
+                if (saved.wstrb[2]) begin
+                  data[saved.cache_index][23:16] <= saved.wdata[23:16];
+                  dirty[saved.cache_index][saved.way_hit_index] <= 1;
+                end
+                if (saved.wstrb[3]) begin
+                  data[saved.cache_index][31:24] <= saved.wdata[31:24];
+                  dirty[saved.cache_index][saved.way_hit_index] <= 1;
+                end
+              end
+              current_state <= CACHE_AVAILABLE;
+            end else begin
+              // replay buffered miss request
+              proc.AWREADY <= False;
+              proc.WREADY <= False;
+              read_miss <= saved.is_read;
+              if (!dirty[saved.cache_index][saved.victim_way_index]) begin
+                // clean miss: send read request to memory
+                mem.ARVALID <= True;
+                mem.ARADDR <= saved.req_addr;
+                mem.RREADY <= True;
+                current_state <= CACHE_AWAIT_FILL_RESPONSE;
+`ifndef SYNTHESIS
+                $display("%0t replay-miss-start req_addr=%h", $time, saved.req_addr);
+`endif
+              end else begin
+                // dirty miss: writeback dirty line first
+                mem.AWVALID <= True;
+                mem.AWADDR <= {tag[saved.cache_index], saved.cache_index, {BlockOffsetBits{1'b0}}};
+                mem.WVALID <= True;
+                mem.WDATA <= data[saved.cache_index];
+                mem.WSTRB <= 4'hF;
+                mem.BREADY <= True;
+                current_state <= CACHE_AWAIT_WRITEBACK_RESPONSE;
+              end
+            end
+          end
+        end
+
+        CACHE_AWAIT_FILL_RESPONSE: begin
+          if (mem.ARREADY) begin
+            // our request was received by the memory
+            mem.ARVALID <= False;
+            mem.ARADDR <= 0;
+          end
+          if (mem.RVALID) begin
+            // fill data from memory into cache
+            // data[saved.cache_index][saved.victim_way_index] <= mem.RDATA;
+            data[saved.cache_index] <= mem.RDATA;
+            valid[saved.cache_index][saved.victim_way_index] <= True;
+            dirty[saved.cache_index][saved.victim_way_index] <= False;
+            // tag[saved.cache_index][saved.victim_way_index] <= saved.tag;
+            tag[saved.cache_index] <= saved.tag;
+            mem.RREADY <= False;
+
+            // respond to proc
+            current_state <= CACHE_AVAILABLE;
+            proc.ARREADY <= True;
+            proc.AWREADY <= True;
+            proc.WREADY <= True;
+
+            // perform cache hit
+            lru[saved.cache_index].l <= ~saved.way_hit_index;
+            if (read_miss) begin
+              proc.RDATA <= mem.RDATA;
+              proc.RVALID <= True;
+`ifndef SYNTHESIS
+              $display("%0t miss-fill rsp=%h proc_rready=%0d", $time, mem.RDATA, proc.RREADY);
+`endif
+            end else begin
+              proc.BVALID <= True;
+              if (saved.wstrb[0]) begin
+                // data[saved.cache_index][saved.way_hit_index][7:0] <= saved.wdata[7:0];
+                data[saved.cache_index][7:0] <= saved.wdata[7:0];
+                dirty[saved.cache_index][saved.way_hit_index] <= 1;
+              end
+              if (saved.wstrb[1]) begin
+                // data[saved.cache_index][saved.way_hit_index][15:8] <= saved.wdata[15:8];
+                data[saved.cache_index][15:8] <= saved.wdata[15:8];
+                dirty[saved.cache_index][saved.way_hit_index] <= 1;
+              end
+              if (saved.wstrb[2]) begin
+                // data[saved.cache_index][saved.way_hit_index][23:16] <= saved.wdata[23:16];
+                data[saved.cache_index][23:16] <= saved.wdata[23:16];
+                dirty[saved.cache_index][saved.way_hit_index] <= 1;
+              end
+              if (saved.wstrb[3]) begin
+                // data[saved.cache_index][saved.way_hit_index][31:24] <= saved.wdata[31:24];
+                data[saved.cache_index][31:24] <= saved.wdata[31:24];
+                dirty[saved.cache_index][saved.way_hit_index] <= 1;
+              end
+            end
+          end
+        end
+
+        CACHE_AWAIT_WRITEBACK_RESPONSE: begin
+          if (mem.AWREADY) begin
+            // our request was received by the memory
+            mem.AWVALID <= False;
+            mem.AWADDR <= 0;
+            mem.WVALID <= False;
+            mem.WDATA <= 0;
+            mem.WSTRB <= 0;
+          end
+          if (mem.BVALID) begin
+            // writeback was completed by memory, now send fill request
+            mem.ARVALID <= True;
+            mem.ARADDR <= saved.req_addr;
+            mem.RREADY <= True;
+            mem.BREADY <= False;
+            current_state <= CACHE_AWAIT_FILL_RESPONSE;
+          end
+        end
+
+        default: begin
+        end
+      endcase
     end
   end
 
 endmodule // AxilCache
 
 `ifndef SYNTHESIS
-/** This is used for testing AxilCache in simulation. Since Verilator doesn't allow
-SV interfaces in a top-level module, we wrap the interfaces with plain wires. */
+/** This is used for testing AxilCache in simulation, since Verilator doesn't allow
+SV interfaces in top-level modules */
 module AxilCacheTester #(
     // these parameters are for the AXIL interface
     parameter int ADDR_WIDTH = 32,
     parameter int DATA_WIDTH = 32,
     // these parameters are for the cache
     parameter int BLOCK_SIZE_BITS = 32,
+    parameter int WAYS = 1,
     parameter int NUM_SETS = 4
 ) (
     input wire ACLK,
@@ -335,6 +687,7 @@ module AxilCacheTester #(
 
   AxilCache #(
     .BLOCK_SIZE_BITS(BLOCK_SIZE_BITS),
+    .WAYS(WAYS),
     .NUM_SETS(NUM_SETS)
   ) cache (
       .ACLK(ACLK),
