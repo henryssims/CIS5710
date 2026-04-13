@@ -38,7 +38,7 @@ Once your code passes all the tests, you are ready to submit your fixed `rca.sv`
 
 Now that your code works in simulation, you can run the FPGA board demo to see it run in real life!
 
-The demo code is in the `rca4_demo` module, and it uses your adder to add 2 to a 4-digit binary number represented by four of the board's buttons (B2, B5, B4, B6). When a button is not pressed, it represents a 0; pressing it changes that bit to a 1 instead. The resulting sum is displayed on LEDs D0-D5.
+The demo code is in the `rca4_demo` module, and it uses your adder to add 2 to a 4-digit binary number represented by four of the board's buttons (buttons B2, B5, B4, B6 as bits [3:0], respectively). When a button is not pressed, it represents a 0; pressing it changes that bit to a 1 instead. The resulting sum is displayed on LEDs D0-D5.
 
 
 ### Generating a bitstream
@@ -73,9 +73,7 @@ Lastly, run `fujprog.exe path\to\your\bitstream` to program your FPGA. If everyt
 
 On macOS, we use `openFPGALoader` to program the FPGA.
 
-First, open a terminal and run: `brew install openfpgaloader`. 
-
-Then, connect the FPGA to your Mac through the `us1` micro-USB connector on the board. See the picture below.
+First, open a terminal and run: `brew install openfpgaloader`. Then, connect the FPGA to your Mac through the `us1` micro-USB connector on the board. See the picture below.
 
 Ensure your ULX3S FPGA is recognized by your Mac: - Open **System Information** → **USB**, and check for a device named **ULX3S FPGA**. - Alternatively, run: `ls /dev/cu.*`. Look for a device with the pattern `/dev/cu.usbserial-*`.
 
