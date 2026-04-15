@@ -1,9 +1,6 @@
 ////////////////////////////////////////////////
 // Generative AI was used to make this code.
 ////////////////////////////////////////////////
-////////////////////////////////////////////////
-// Generative AI was used to make this code.
-////////////////////////////////////////////////
 `timescale 1ns / 1ns
 
 // registers are 32 bits in RV32
@@ -67,21 +64,20 @@ module RegFile (
   assign regs[0]  = 32'd0;
   assign rs1_data = (we && rd != 5'd0 && rd == rs1) ? rd_data : regs[rs1];
   assign rs2_data = (we && rd != 5'd0 && rd == rs2) ? rd_data : regs[rs2];
-  assign regs[0]  = 32'd0;
-  assign rs1_data = (we && rd != 5'd0 && rd == rs1) ? rd_data : regs[rs1];
-  assign rs2_data = (we && rd != 5'd0 && rd == rs2) ? rd_data : regs[rs2];
   genvar i;
-  for (i = 1; i < 32; i = i + 1) begin : gen_regs
+  for (i = 1; i < 32; i = i + 1) begin
     always_ff @(posedge clk) begin
-      if (rst) regs[i] <= 32'd0;
-      else if (we && rd == i) regs[i] <= rd_data;
+      if (rst) begin
+        regs[i] <= 32'd0;
+      end else begin
+        if (we && rd == 5'(i)) begin
+          regs[i] <= rd_data;
+        end
+      end
     end
   end
 endmodule
 
-// ---------------------------------------------------------------------------
-// Stage structs
-// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 // Stage structs
 // ---------------------------------------------------------------------------
@@ -93,14 +89,7 @@ typedef struct packed {
 
 typedef struct packed {
   logic [`REG_SIZE]  pc;
-  logic [`REG_SIZE]  pc;
   logic [`INSN_SIZE] insn;
-  cycle_status_e     cycle_status;
-  logic [`REG_SIZE]  rs1_data;
-  logic [`REG_SIZE]  rs2_data;
-  logic [4:0]        rs1;
-  logic [4:0]        rs2;
-  logic [4:0]        rd;
   cycle_status_e     cycle_status;
   logic [`REG_SIZE]  rs1_data;
   logic [`REG_SIZE]  rs2_data;
@@ -111,13 +100,7 @@ typedef struct packed {
 
 typedef struct packed {
   logic [`REG_SIZE]  pc;
-  logic [`REG_SIZE]  pc;
   logic [`INSN_SIZE] insn;
-  cycle_status_e     cycle_status;
-  logic [`REG_SIZE]  alu_result;
-  logic [`REG_SIZE]  rs2_data;
-  logic [4:0]        rd;
-  logic              we;
   cycle_status_e     cycle_status;
   logic [`REG_SIZE]  alu_result;
   logic [`REG_SIZE]  rs2_data;
@@ -138,20 +121,6 @@ typedef struct packed {
 // Divider metadata: travels alongside the divider pipeline
 // ---------------------------------------------------------------------------
 typedef struct packed {
-  logic [`REG_SIZE]  pc;
-  logic [`INSN_SIZE] insn;
-  cycle_status_e     cycle_status;
-  logic [`REG_SIZE]  rd_data;
-  logic [4:0]        rd;
-  logic              we;
-} stage_writeback_t;
-
-// ---------------------------------------------------------------------------
-// Divider metadata: travels alongside the divider pipeline
-// ---------------------------------------------------------------------------
-typedef struct packed {
-  logic             valid;    // 1 = a divide result is emerging this stage
-  logic [4:0]       rd;       // destination register
   logic             valid;    // 1 = a divide result is emerging this stage
   logic [4:0]       rd;       // destination register
   logic [`REG_SIZE] pc;
@@ -165,41 +134,21 @@ typedef struct packed {
 // ---------------------------------------------------------------------------
 // DatapathPipelined
 // ---------------------------------------------------------------------------
-  cycle_status_e    cycle_status;
-  logic [2:0]       funct3;   // encodes div/divu/rem/remu
-  logic [`REG_SIZE] op1;      // original rs1 (for sign/zero correction)
-  logic [`REG_SIZE] op2;      // original rs2 (for sign/zero correction)
-} div_meta_t;
-
-// ---------------------------------------------------------------------------
-// DatapathPipelined
-// ---------------------------------------------------------------------------
 module DatapathPipelined (
-    input  wire              clk,
-    input  wire              rst,
     input  wire              clk,
     input  wire              rst,
     output logic [`REG_SIZE] pc_to_imem,
     input  wire  [`REG_SIZE] insn_from_imem,
-    input  wire  [`REG_SIZE] insn_from_imem,
     output logic [`REG_SIZE] addr_to_dmem,
     input  wire  [`REG_SIZE] load_data_from_dmem,
-    input  wire  [`REG_SIZE] load_data_from_dmem,
     output logic [`REG_SIZE] store_data_to_dmem,
-    output logic [3:0]       store_we_to_dmem,
-    output logic             halt,
     output logic [3:0]       store_we_to_dmem,
     output logic             halt,
     output logic [`REG_SIZE] trace_completed_pc,
     output logic [`INSN_SIZE] trace_completed_insn,
     output cycle_status_e    trace_completed_cycle_status
-    output cycle_status_e    trace_completed_cycle_status
 );
 
-  localparam bit [`OPCODE_SIZE] OpcodeLoad    = 7'b00_000_11;
-  localparam bit [`OPCODE_SIZE] OpcodeStore   = 7'b01_000_11;
-  localparam bit [`OPCODE_SIZE] OpcodeBranch  = 7'b11_000_11;
-  localparam bit [`OPCODE_SIZE] OpcodeJalr    = 7'b11_001_11;
   localparam bit [`OPCODE_SIZE] OpcodeLoad    = 7'b00_000_11;
   localparam bit [`OPCODE_SIZE] OpcodeStore   = 7'b01_000_11;
   localparam bit [`OPCODE_SIZE] OpcodeBranch  = 7'b11_000_11;
@@ -208,13 +157,7 @@ module DatapathPipelined (
   localparam bit [`OPCODE_SIZE] OpcodeJal     = 7'b11_011_11;
   localparam bit [`OPCODE_SIZE] OpcodeRegImm  = 7'b00_100_11;
   localparam bit [`OPCODE_SIZE] OpcodeRegReg  = 7'b01_100_11;
-  localparam bit [`OPCODE_SIZE] OpcodeJal     = 7'b11_011_11;
-  localparam bit [`OPCODE_SIZE] OpcodeRegImm  = 7'b00_100_11;
-  localparam bit [`OPCODE_SIZE] OpcodeRegReg  = 7'b01_100_11;
   localparam bit [`OPCODE_SIZE] OpcodeEnviron = 7'b11_100_11;
-  localparam bit [`OPCODE_SIZE] OpcodeAuipc   = 7'b00_101_11;
-  localparam bit [`OPCODE_SIZE] OpcodeLui     = 7'b01_101_11;
-
   localparam bit [`OPCODE_SIZE] OpcodeAuipc   = 7'b00_101_11;
   localparam bit [`OPCODE_SIZE] OpcodeLui     = 7'b01_101_11;
 
@@ -394,19 +337,13 @@ module DatapathPipelined (
   logic [`REG_SIZE] f_pc_current;
   wire  [`REG_SIZE] f_insn = insn_from_imem;
   cycle_status_e    f_cycle_status;
-  wire  [`REG_SIZE] f_insn = insn_from_imem;
-  cycle_status_e    f_cycle_status;
 
   always_ff @(posedge clk) begin
     if (rst) begin
       f_pc_current   <= 32'd0;
-      f_pc_current   <= 32'd0;
       f_cycle_status <= CYCLE_NO_STALL;
     end else begin
       f_cycle_status <= CYCLE_NO_STALL;
-      if (pipeline_stall)      f_pc_current <= f_pc_current;
-      else if (x_branch_taken) f_pc_current <= x_branch_target;
-      else                     f_pc_current <= f_pc_current + 4;
       if (pipeline_stall)      f_pc_current <= f_pc_current;
       else if (x_branch_taken) f_pc_current <= x_branch_target;
       else                     f_pc_current <= f_pc_current + 4;
@@ -420,18 +357,7 @@ module DatapathPipelined (
   // =========================================================================
   // DECODE
   // =========================================================================
-  // =========================================================================
-  // DECODE
-  // =========================================================================
   always_ff @(posedge clk) begin
-    if (rst)
-      decode_state <= '{pc:0, insn:0, cycle_status:CYCLE_RESET};
-    else if (pipeline_stall)
-      decode_state <= decode_state;
-    else if (x_branch_taken)
-      decode_state <= '{pc:0, insn:0, cycle_status:CYCLE_TAKEN_BRANCH};
-    else
-      decode_state <= '{pc:f_pc_current, insn:f_insn, cycle_status:f_cycle_status};
     if (rst)
       decode_state <= '{pc:0, insn:0, cycle_status:CYCLE_RESET};
     else if (pipeline_stall)
@@ -800,58 +726,11 @@ module DatapathPipelined (
   // All instructions, including completed divides, write back through the normal W stage.
   // =========================================================================
   stage_writeback_t writeback_state;
-    addr_to_dmem=0;store_data_to_dmem=0;store_we_to_dmem=0;
-    if(m_is_load) addr_to_dmem={memory_state.alu_result[31:2],2'b0};
-    else if(m_is_store) begin
-      addr_to_dmem={memory_state.alu_result[31:2],2'b0};
-      if(m_sw) begin store_data_to_dmem=m_store_data;store_we_to_dmem=4'b1111;end
-      else if(m_sh) begin
-        store_data_to_dmem=memory_state.alu_result[1]?{m_store_data[15:0],16'b0}:{16'b0,m_store_data[15:0]};
-        store_we_to_dmem=memory_state.alu_result[1]?4'b1100:4'b0011;
-      end else if(m_sb) begin
-        store_data_to_dmem={4{m_store_data[7:0]}};
-        case(memory_state.alu_result[1:0])
-          2'b00:store_we_to_dmem=4'b0001;2'b01:store_we_to_dmem=4'b0010;
-          2'b10:store_we_to_dmem=4'b0100;2'b11:store_we_to_dmem=4'b1000;
-        endcase
-      end
-    end
-  end
-
-  // =========================================================================
-  // WRITEBACK
-  // All instructions, including completed divides, write back through the normal W stage.
-  // =========================================================================
-  stage_writeback_t writeback_state;
   always_ff @(posedge clk) begin
     if (rst)
       writeback_state <= '{pc:0,insn:0,cycle_status:CYCLE_RESET,rd_data:0,rd:0,we:0};
     else
-    if (rst)
-      writeback_state <= '{pc:0,insn:0,cycle_status:CYCLE_RESET,rd_data:0,rd:0,we:0};
-    else
       writeback_state <= '{
-        pc:memory_state.pc, insn:memory_state.insn, cycle_status:memory_state.cycle_status,
-        rd_data:m_is_load?m_load_result:memory_state.alu_result,
-        rd:memory_state.rd, we:memory_state.we
-      };
-  end
-
-  wire [255:0] w_disasm;
-  Disasm #(.PREFIX("W")) disasm_4writeback (.insn(writeback_state.insn), .disasm(w_disasm));
-
-  // Writeback outputs
-  assign w_rd      = writeback_state.rd;
-  assign w_rd_data = writeback_state.rd_data;
-  assign w_we      = writeback_state.we;
-
-  assign halt = (writeback_state.insn[6:0]==OpcodeEnviron)
-             && (writeback_state.insn[31:7]==25'd0)
-             && (writeback_state.cycle_status==CYCLE_NO_STALL);
-
-  wire w_valid = writeback_state.cycle_status==CYCLE_NO_STALL;
-  assign trace_completed_pc           = w_valid ? writeback_state.pc   : 32'd0;
-  assign trace_completed_insn         = w_valid ? writeback_state.insn : 32'd0;
         pc:memory_state.pc, insn:memory_state.insn, cycle_status:memory_state.cycle_status,
         rd_data:m_is_load?m_load_result:memory_state.alu_result,
         rd:memory_state.rd, we:memory_state.we
@@ -880,32 +759,16 @@ endmodule
 module MemorySingleCycle #(parameter int NUM_WORDS=512) (
     input  wire rst,clk,
     input  wire [`REG_SIZE]  pc_to_imem,
-module MemorySingleCycle #(parameter int NUM_WORDS=512) (
-    input  wire rst,clk,
-    input  wire [`REG_SIZE]  pc_to_imem,
     output logic [`REG_SIZE] insn_from_imem,
     input  wire [`REG_SIZE]  addr_to_dmem,
-    input  wire [`REG_SIZE]  addr_to_dmem,
     output logic [`REG_SIZE] load_data_from_dmem,
-    input  wire [`REG_SIZE]  store_data_to_dmem,
-    input  wire [3:0]        store_we_to_dmem
     input  wire [`REG_SIZE]  store_data_to_dmem,
     input  wire [3:0]        store_we_to_dmem
 );
   logic [`REG_SIZE] mem_array[NUM_WORDS];
 `ifdef SYNTHESIS
   initial begin $readmemh("mem_initial_contents.hex",mem_array); end
-  initial begin $readmemh("mem_initial_contents.hex",mem_array); end
 `endif
-  always_comb begin assert(pc_to_imem[1:0]==2'b00);assert(addr_to_dmem[1:0]==2'b00);end
-  localparam int AddrMsb=$clog2(NUM_WORDS)+1,AddrLsb=2;
-  always @(negedge clk) if(!rst) insn_from_imem<=mem_array[pc_to_imem[AddrMsb:AddrLsb]];
-  always @(negedge clk) if(!rst) begin
-    if(store_we_to_dmem[0])mem_array[addr_to_dmem[AddrMsb:AddrLsb]][7:0]  <=store_data_to_dmem[7:0];
-    if(store_we_to_dmem[1])mem_array[addr_to_dmem[AddrMsb:AddrLsb]][15:8] <=store_data_to_dmem[15:8];
-    if(store_we_to_dmem[2])mem_array[addr_to_dmem[AddrMsb:AddrLsb]][23:16]<=store_data_to_dmem[23:16];
-    if(store_we_to_dmem[3])mem_array[addr_to_dmem[AddrMsb:AddrLsb]][31:24]<=store_data_to_dmem[31:24];
-    load_data_from_dmem<=mem_array[addr_to_dmem[AddrMsb:AddrLsb]];
   always_comb begin assert(pc_to_imem[1:0]==2'b00);assert(addr_to_dmem[1:0]==2'b00);end
   localparam int AddrMsb=$clog2(NUM_WORDS)+1,AddrLsb=2;
   always @(negedge clk) if(!rst) insn_from_imem<=mem_array[pc_to_imem[AddrMsb:AddrLsb]];
@@ -920,23 +783,15 @@ endmodule
 
 module Processor (
     input  wire  clk,rst,
-    input  wire  clk,rst,
     output logic halt,
     output wire [`REG_SIZE]  trace_completed_pc,
-    output wire [`REG_SIZE]  trace_completed_pc,
     output wire [`INSN_SIZE] trace_completed_insn,
-    output cycle_status_e    trace_completed_cycle_status
     output cycle_status_e    trace_completed_cycle_status
 );
   wire [`INSN_SIZE] insn_from_imem;
   wire [`REG_SIZE]  pc_to_imem,mem_data_addr,mem_data_loaded_value,mem_data_to_write;
-  wire [`REG_SIZE]  pc_to_imem,mem_data_addr,mem_data_loaded_value,mem_data_to_write;
   wire [3:0] mem_data_we;
   wire [(8*32)-1:0] test_case;
-  MemorySingleCycle #(.NUM_WORDS(8192)) memory (
-      .rst(rst),.clk(clk),.pc_to_imem(pc_to_imem),.insn_from_imem(insn_from_imem),
-      .addr_to_dmem(mem_data_addr),.load_data_from_dmem(mem_data_loaded_value),
-      .store_data_to_dmem(mem_data_to_write),.store_we_to_dmem(mem_data_we));
   MemorySingleCycle #(.NUM_WORDS(8192)) memory (
       .rst(rst),.clk(clk),.pc_to_imem(pc_to_imem),.insn_from_imem(insn_from_imem),
       .addr_to_dmem(mem_data_addr),.load_data_from_dmem(mem_data_loaded_value),
@@ -946,11 +801,6 @@ module Processor (
       .addr_to_dmem(mem_data_addr),.store_data_to_dmem(mem_data_to_write),
       .store_we_to_dmem(mem_data_we),.load_data_from_dmem(mem_data_loaded_value),
       .halt(halt),.trace_completed_pc(trace_completed_pc),
-      .clk(clk),.rst(rst),.pc_to_imem(pc_to_imem),.insn_from_imem(insn_from_imem),
-      .addr_to_dmem(mem_data_addr),.store_data_to_dmem(mem_data_to_write),
-      .store_we_to_dmem(mem_data_we),.load_data_from_dmem(mem_data_loaded_value),
-      .halt(halt),.trace_completed_pc(trace_completed_pc),
       .trace_completed_insn(trace_completed_insn),
-      .trace_completed_cycle_status(trace_completed_cycle_status));
       .trace_completed_cycle_status(trace_completed_cycle_status));
 endmodule
